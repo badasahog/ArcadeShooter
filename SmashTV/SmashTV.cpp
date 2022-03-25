@@ -22,6 +22,9 @@
 #endif
 
 #if !_HAS_CXX20
+#ifdef __clang__
+#error clang does not yet have full C++20 support. To run this application on msbuild please select c++latest as the version
+#endif
 #error C++20 is required
 #endif
 
@@ -111,14 +114,40 @@ constexpr int RESOLUTION_X = 256;
 constexpr int RESOLUTION_Y = 224;
 /*
 * research:
-* in a closed stadium x goes from 30 to 226
-* in a closed stadium y goes from 49 to 222
+* in a closed stadium player x goes from 30 to 226
+* in a closed stadium player y goes from 49 to 222
+* 
+* in any stadium bullet x goes from 18 to 238
+* in any stadium bullet y goes from 20 to 220
 * 
 * player torso is offset from position by -16, -24
 * 
 * player pants is offset from position by -8, -8
 * 
 * when facing left the sprites are shifted to the right by 1
+* 
+* when shooting, a bullet is fired every 9 frames
+* 
+* bullet offsets (first frame after firing):
+* 
+* up: 0, -28
+* 
+* up left: -12, -26
+* 
+* left: -20, -14
+* 
+* down left: -12, -1
+* 
+* down: 1, 4
+* 
+* down right: 11, -1
+* 
+* right: 21, -14
+* 
+* up right: 11, -26
+* 
+* bullets fired diagonally alternate between movements of 3 and 4 in each direction.
+* when a bullet hits the wall, it stays there for six frames.
 * 
 * when walking up left and shooting up right, the hero's legs are shifted one pixel to the left
 * 
@@ -249,6 +278,18 @@ int main()
 		L"sprites/hero_shoot_UR_1.png",
 		L"sprites/hero_shoot_UR_2.png",
 		L"sprites/background.png",
+		L"sprites/hero_bullet_U.png",
+		L"sprites/hero_bullet_UL.png",
+		L"sprites/hero_bullet_L.png",
+		L"sprites/hero_bullet_DL.png",
+		L"sprites/hero_bullet_D.png",
+		L"sprites/hero_bullet_DR.png",
+		L"sprites/hero_bullet_R.png",
+		L"sprites/hero_bullet_UR.png",
+		L"sprites/hero_bullet_explode_U.png",
+		L"sprites/hero_bullet_explode_L.png",
+		L"sprites/hero_bullet_explode_D.png",
+		L"sprites/hero_bullet_explode_R.png",
 	}};
 	HINSTANCE hInstance = GetModuleHandleW(nullptr);
 	// Register the window class.
@@ -387,6 +428,14 @@ int main()
 	auto lastFrame = std::chrono::system_clock::now();
 	uint64_t frameNum = 0;
 	int state = 0;
+	struct bullet
+	{
+		int x;
+		int y;
+		int direction;
+		int burnout; //
+	};
+	std::vector<bullet> bullets;
 	/*
 	* 
 	*     0
@@ -454,6 +503,67 @@ int main()
 					state = 4;
 				else if (controller.right)
 					state = 6;
+				const bool isShooting = controller.A || controller.B || controller.X || controller.Y;
+				if (isShooting && frameNum % 7 == 0)
+				{
+					if (state == 0)
+						bullets.push_back({
+							.x = heroX - 0,
+							.y = heroY -28,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 1)
+						bullets.push_back({
+							.x = heroX - 12,
+							.y = heroY - 26,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 2)
+						bullets.push_back({
+							.x = heroX - 20,
+							.y = heroY - 14,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 3)
+						bullets.push_back({
+							.x = heroX - 12,
+							.y = heroY - 1,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 4)
+						bullets.push_back({
+							.x = heroX + 1,
+							.y = heroY + 4,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 5)
+						bullets.push_back({
+							.x = heroX + 11,
+							.y = heroY - 1,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 6)
+						bullets.push_back({
+							.x = heroX + 21,
+							.y = heroY - 14,
+							.direction = state,
+							.burnout = 0
+						});
+					else if (state == 7)
+						bullets.push_back({
+							.x = heroX + 11,
+							.y = heroY - 26,
+							.direction = state,
+							.burnout = 0
+						});
+				}
+
 				m_pRenderTarget->BeginDraw();
 
 				m_pRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::SkyBlue));
@@ -512,20 +622,7 @@ int main()
 				(
 					bmpResourceSets.at(
 						[&]()->int {
-							//const bool hmove = controller.left || controller.right;
-							//if (controller.left && controller.up)
-							//	return 1;
-							//if (controller.left && controller.down)
-							//	return 3;
-							//if (controller.right)
-							//	return 6;
-							//if (controller.up)
-							//	return 0;
-							//if (controller.left)
-							//	return 2;
-							//if (controller.down)
-							//	return 4;
-							if (controller.A || controller.B || controller.X || controller.Y)
+							if (isShooting)
 								return 62 + 2 * state + (frameNum / 4) % 2;
 							else return state;
 						}()).bmp.Get(),
@@ -543,7 +640,90 @@ int main()
 						bmpResourceSets.at(0).bmp->GetSize().width, bmpResourceSets.at(0).bmp->GetSize().height
 					)
 				);
+				for (int i = bullets.size()-1; i > -1; i--)
+				{
+					m_pRenderTarget->DrawBitmap
+					(
+						bmpResourceSets.at(
+							[&]()->int {
+								if (bullets[i].burnout == 0)
+									return bullets[i].direction + 79;
+								else return 87 + bullets[i].direction/2;
+						}()).bmp.Get(),
+						D2D1::RectF
+						(
+							bullets[i].x - 8,
+							bullets[i].y - 8,
+							bullets[i].x - 8 + bmpResourceSets.at(0).bmp->GetSize().width,
+							bullets[i].y - 8 + bmpResourceSets.at(0).bmp->GetSize().height
+						),
+						1.0f,
+						D2D1_BITMAP_INTERPOLATION_MODE::D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+						D2D1::RectF(
+							0.0f, 0.0f,
+							bmpResourceSets.at(0).bmp->GetSize().width, bmpResourceSets.at(0).bmp->GetSize().height
+						)
+					);
 
+					if (bullets[i].burnout == 0)
+					{
+						if (bullets[i].direction == 0)
+							bullets[i].y -= 5;
+						else if (bullets[i].direction == 2)
+							bullets[i].x -= 5;
+						else if (bullets[i].direction == 4)
+							bullets[i].y += 5;
+						else if (bullets[i].direction == 6)
+							bullets[i].x += 5;
+
+						if (bullets[i].direction == 1)
+						{
+							bullets[i].x -= frameNum % 2 == 0 ? 3 : 4;
+							bullets[i].y -= frameNum % 2 == 1 ? 3 : 4;
+						}
+						else if (bullets[i].direction == 3)
+						{
+							bullets[i].x -= frameNum % 2 == 0 ? 3 : 4;
+							bullets[i].y += frameNum % 2 == 1 ? 3 : 4;
+						}
+						else if (bullets[i].direction == 5)
+						{
+							bullets[i].x += frameNum % 2 == 0 ? 3 : 4;
+							bullets[i].y += frameNum % 2 == 1 ? 3 : 4;
+						}
+						else if (bullets[i].direction == 7)
+						{
+							bullets[i].x += frameNum % 2 == 0 ? 3 : 4;
+							bullets[i].y -= frameNum % 2 == 1 ? 3 : 4;
+						}
+					}
+					else if (bullets[i].burnout == 6)
+					{
+						bullets.erase(bullets.begin() + i);
+						continue;
+					}
+					else
+					{
+						bullets[i].burnout++;
+					}
+
+					//check bounds
+
+					//in any stadium bullet x goes from 18 to 238
+					//in any stadium bullet y goes from 20 to 220
+					if (bullets[i].burnout == 0)
+					{
+						if (bullets[i].x < 18)
+							bullets[i].x = 18, bullets[i].burnout = 1, bullets[i].direction = 2;
+						else if (bullets[i].x > 238)
+							bullets[i].x = 238, bullets[i].burnout = 1, bullets[i].direction = 6;
+						else if (bullets[i].y < 20)
+							bullets[i].y = 20, bullets[i].burnout = 1, bullets[i].direction = 0;
+						else if (bullets[i].y > 220)
+							bullets[i].y = 220, bullets[i].burnout = 1, bullets[i].direction = 4;
+					}
+				}
+				
 				//m_pRenderTarget->DrawText(
 				//	sc_helloWorld,
 				//	ARRAYSIZE(sc_helloWorld) - 1,
@@ -565,13 +745,12 @@ int main()
 				else if (controller.right)
 					heroX++;
 
-				//in a closed stadium x goes from 30 to 226
-				//in a closed stadium y goes from 49 to 222
-
 				if (heroX < 30)heroX = 30;
 				if (heroY < 49)heroY = 49;
 				if (heroX > 226)heroX = 226;
 				if (heroY > 222)heroY = 222;
+
+
 			}
 		}
 
